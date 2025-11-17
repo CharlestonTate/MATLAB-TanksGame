@@ -94,6 +94,7 @@ function tank_game_smooth(fig)
     tankAccel = 0.040;
     tankMaxSpeed = 1.50;
     tankFriction = 0.85;
+    tankHealth = 100;
 
     bulletActive = false;
     bulletPos = [0 0];
@@ -101,6 +102,20 @@ function tank_game_smooth(fig)
     bulletSpeed = 0.25;
     bulletBounces = 0;
     maxBounces = 1;
+
+    % Enemy AI
+    numEnemies = 1;
+    enemies = struct('pos',{},'dir',{},'vel',{},'health',{},'shootTimer',{},'body',{},'barrel',{});
+    for i = 1:numEnemies
+        enemies(i).pos = [rand()*gridSize, rand()*gridSize];
+        enemies(i).dir = [rand()-0.5, rand()-0.5];
+        enemies(i).dir = enemies(i).dir / norm(enemies(i).dir);
+        enemies(i).vel = [0 0];
+        enemies(i).health = 10;
+        enemies(i).shootTimer = rand()*100;
+    end
+    
+    enemyBullets = struct('pos',{},'dir',{},'active',{});
 
     targets = [5 5; 15 15; 5 15; 15 5];
     score = 0;
@@ -111,7 +126,16 @@ function tank_game_smooth(fig)
     keys.right = false;
     keys.shoot = false;
 
-    ax = uiaxes(fig,'Position',[50 40 500 320]);
+    % HUD panels
+    hudPanel = uipanel(fig,'Position',[50 360 500 30],'BackgroundColor',[0.15 0.15 0.15]);
+    healthLabel = uilabel(hudPanel,'Text',sprintf('HP: %d', tankHealth),'Position',[10 5 100 20],...
+        'FontSize',12,'FontWeight','bold','FontColor',[0.2 1.0 0.2]);
+    scoreLabel = uilabel(hudPanel,'Text',sprintf('Score: %d', score),'Position',[200 5 100 20],...
+        'FontSize',12,'FontWeight','bold','FontColor',[1.0 0.8 0.2]);
+    enemyLabel = uilabel(hudPanel,'Text',sprintf('Enemies: %d', numEnemies),'Position',[380 5 100 20],...
+        'FontSize',12,'FontWeight','bold','FontColor',[1.0 0.3 0.3]);
+
+    ax = uiaxes(fig,'Position',[50 40 500 310]);
     axis(ax,[0.5 gridSize+0.5 0.5 gridSize+0.5]);
     axis(ax,'square');
     set(ax,'XTick',[],'YTick',[]);
@@ -130,11 +154,24 @@ function tank_game_smooth(fig)
         [tankPos(2), tankPos(2)+0.7*tankDir(2)],'LineWidth',3,'Color','k');
     bulletPlot = plot(ax,nan,nan,'ro','MarkerFaceColor','r','MarkerSize',8);
 
+    % Create enemy graphics
+    for i = 1:numEnemies
+        enemies(i).body = rectangle(ax,'Position',[enemies(i).pos(1)-0.4,enemies(i).pos(2)-0.4,0.8,0.8], ...
+            'FaceColor','r','EdgeColor','k');
+        enemies(i).barrel = line(ax,[enemies(i).pos(1), enemies(i).pos(1)+0.7*enemies(i).dir(1)], ...
+            [enemies(i).pos(2), enemies(i).pos(2)+0.7*enemies(i).dir(2)],'LineWidth',3,'Color','k');
+    end
+    
+    enemyBulletPlot = plot(ax,nan,nan,'mo','MarkerFaceColor','m','MarkerSize',6);
+
     fig.KeyPressFcn = @onKeyDown;
     fig.KeyReleaseFcn = @onKeyUp;
-    fig.Name = 'MATLAB Tanks Smooth';
+    fig.Name = 'MATLAB Tanks with AI';
 
-    while isvalid(fig)
+    gameOver = false;
+    
+    while isvalid(fig) && ~gameOver
+        % Player movement (unchanged)
         moveDir = [0 0];
         if keys.up,    moveDir(2) = moveDir(2) + 1; end
         if keys.down,  moveDir(2) = moveDir(2) - 1; end
@@ -159,6 +196,7 @@ function tank_game_smooth(fig)
         tankPos(1) = min(max(tankPos(1),1),gridSize);
         tankPos(2) = min(max(tankPos(2),1),gridSize);
 
+        % Player shooting
         if keys.shoot && ~bulletActive
             bulletActive = true;
             bulletPos = tankPos;
@@ -166,6 +204,7 @@ function tank_game_smooth(fig)
             bulletBounces = 0;
         end
 
+        % Player bullet update
         if bulletActive
             newBulletPos = bulletPos + bulletSpeed * bulletDir;
             bounced = false;
@@ -191,6 +230,7 @@ function tank_game_smooth(fig)
 
             bulletPos = newBulletPos;
 
+            % Check hits on targets
             if ~isempty(targets)
                 hitIndex = 0;
                 for i = 1:size(targets,1)
@@ -211,8 +251,128 @@ function tank_game_smooth(fig)
                     end
                 end
             end
+            
+            % Check hits on enemies
+            for i = numel(enemies):-1:1
+                dist = norm(bulletPos - enemies(i).pos);
+                if dist < 0.6
+                    enemies(i).health = enemies(i).health - 25;
+                    bulletActive = false;
+                    if enemies(i).health <= 0
+                        delete(enemies(i).body);
+                        delete(enemies(i).barrel);
+                        enemies(i) = [];
+                        score = score + 10;
+                    end
+                    break;
+                end
+            end
         end
 
+        % Enemy AI
+        for i = 1:numel(enemies)
+            toPlayer = tankPos - enemies(i).pos;
+            dist = norm(toPlayer);
+            
+            % Tactical AI behavior
+            optimalDist = 6 + rand()*2; % Maintain distance
+            
+            if dist < 3
+                % Too close - retreat while aiming
+                enemies(i).dir = -toPlayer / dist;
+                moveSpeed = 0.03;
+            elseif dist > optimalDist
+                % Too far - advance while aiming
+                enemies(i).dir = toPlayer / dist;
+                moveSpeed = 0.025;
+            else
+                % Optimal range - strafe
+                perpDir = [-toPlayer(2), toPlayer(1)] / dist;
+                if mod(floor(enemies(i).shootTimer/50), 2) == 0
+                    perpDir = -perpDir;
+                end
+                enemies(i).dir = perpDir * 0.7 + toPlayer/dist * 0.3;
+                enemies(i).dir = enemies(i).dir / norm(enemies(i).dir);
+                moveSpeed = 0.02;
+            end
+            
+            % Avoid walls
+            wallAvoid = [0 0];
+            if enemies(i).pos(1) < 3, wallAvoid(1) = 0.05; end
+            if enemies(i).pos(1) > gridSize-3, wallAvoid(1) = -0.05; end
+            if enemies(i).pos(2) < 3, wallAvoid(2) = 0.05; end
+            if enemies(i).pos(2) > gridSize-3, wallAvoid(2) = -0.05; end
+            
+            % Avoid other enemies
+            for j = 1:numel(enemies)
+                if i ~= j
+                    toEnemy = enemies(i).pos - enemies(j).pos;
+                    enemyDist = norm(toEnemy);
+                    if enemyDist < 2.5
+                        wallAvoid = wallAvoid + toEnemy/enemyDist * 0.04;
+                    end
+                end
+            end
+            
+            % Apply movement
+            moveDir = enemies(i).dir + wallAvoid;
+            if norm(moveDir) > 0.01
+                moveDir = moveDir / norm(moveDir);
+            end
+            
+            enemies(i).vel = enemies(i).vel * 0.88 + moveDir * moveSpeed;
+            enemies(i).pos = enemies(i).pos + enemies(i).vel;
+            enemies(i).pos(1) = min(max(enemies(i).pos(1),1),gridSize);
+            enemies(i).pos(2) = min(max(enemies(i).pos(2),1),gridSize);
+            
+            % Aim barrel at player
+            aimDir = toPlayer / dist;
+            enemies(i).dir = aimDir;
+            
+            % Smart shooting - lead the target
+            predictedPos = tankPos + tankVel * 8;
+            leadDir = predictedPos - enemies(i).pos;
+            leadDir = leadDir / norm(leadDir);
+            
+            enemies(i).shootTimer = enemies(i).shootTimer + 1;
+            if enemies(i).shootTimer > 80 && dist < 12 && dist > 2.5
+                enemies(i).shootTimer = rand()*20; % Random offset
+                newBullet.pos = enemies(i).pos;
+                newBullet.dir = leadDir;
+                newBullet.active = true;
+                enemyBullets(end+1) = newBullet;
+            end
+            
+            % Update graphics
+            enemies(i).body.Position = [enemies(i).pos(1)-0.4,enemies(i).pos(2)-0.4,0.8,0.8];
+            enemies(i).barrel.XData = [enemies(i).pos(1), enemies(i).pos(1)+0.7*enemies(i).dir(1)];
+            enemies(i).barrel.YData = [enemies(i).pos(2), enemies(i).pos(2)+0.7*enemies(i).dir(2)];
+        end
+        
+        % Update enemy bullets
+        for i = numel(enemyBullets):-1:1
+            if enemyBullets(i).active
+                enemyBullets(i).pos = enemyBullets(i).pos + 0.15 * enemyBullets(i).dir;
+                
+                % Check bounds
+                if enemyBullets(i).pos(1) < 0.5 || enemyBullets(i).pos(1) > gridSize+0.5 || ...
+                   enemyBullets(i).pos(2) < 0.5 || enemyBullets(i).pos(2) > gridSize+0.5
+                    enemyBullets(i) = [];
+                    continue;
+                end
+                
+                % Check hit on player
+                if norm(enemyBullets(i).pos - tankPos) < 0.6
+                    tankHealth = tankHealth - 10;
+                    enemyBullets(i) = [];
+                    if tankHealth <= 0
+                        gameOver = true;
+                    end
+                end
+            end
+        end
+
+        % Update graphics
         tankBody.Position = [tankPos(1)-0.4,tankPos(2)-0.4,0.8,0.8];
         tankBarrel.XData = [tankPos(1), tankPos(1)+0.7*tankDir(1)];
         tankBarrel.YData = [tankPos(2), tankPos(2)+0.7*tankDir(2)];
@@ -222,10 +382,32 @@ function tank_game_smooth(fig)
         else
             set(bulletPlot,'XData',nan,'YData',nan);
         end
+        
+        % Update enemy bullets plot
+        if ~isempty(enemyBullets)
+            ebx = arrayfun(@(b) b.pos(1), enemyBullets);
+            eby = arrayfun(@(b) b.pos(2), enemyBullets);
+            set(enemyBulletPlot,'XData',ebx,'YData',eby);
+        else
+            set(enemyBulletPlot,'XData',nan,'YData',nan);
+        end
+        
+        % Update HUD
+        healthLabel.Text = sprintf('HP: %d', tankHealth);
+        if tankHealth < 30
+            healthLabel.FontColor = [1.0 0.2 0.2];
+        end
+        scoreLabel.Text = sprintf('Score: %d', score);
+        enemyLabel.Text = sprintf('Enemies: %d', numel(enemies));
 
-        title(ax,sprintf('Score: %d | Bounces: %d/%d', score, bulletBounces, maxBounces+1));
         drawnow limitrate
         pause(0.02);
+    end
+    
+    if gameOver
+        text(ax, gridSize/2, gridSize/2, 'GAME OVER', 'FontSize', 24, 'Color', 'r', ...
+            'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+        pause(3);
     end
 
     function onKeyDown(~,event)
@@ -233,7 +415,6 @@ function tank_game_smooth(fig)
             case 'uparrow'
                 keys.up = true;
             case 'downarrow'
-                keys.down = false;
                 keys.down = true;
             case 'leftarrow'
                 keys.left = true;
