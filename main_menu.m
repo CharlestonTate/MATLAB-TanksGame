@@ -1,239 +1,261 @@
-function tank_wall_editor
-    % Visual Wall Editor for Tank Game
-    % Click and drag to draw walls, then copy the MATLAB code
-    
-    fig = uifigure('Name','Tank Game Wall Editor','Position',[200 100 900 700], ...
-        'Color',[0.08 0.09 0.12]);
-    
+function main_menu
+    fig = uifigure('Name','Tank Game','Position',[500 300 600 400],'Color',[0.08 0.09 0.12]);
+
+    uilabel(fig,'Text','TANK GAME','FontSize',28,'FontWeight','bold','FontColor',[0.95 0.95 0.95], ...
+        'HorizontalAlignment','center','Position',[0 280 600 80]);
+
+    uilabel(fig,'Text','MAIN MENU','FontSize',16,'FontColor',[0.7 0.7 0.7], ...
+        'HorizontalAlignment','center','Position',[0 245 600 40]);
+
+    baseColor  = [0.20 0.45 0.80];
+    hoverColor = [0.35 0.70 1.00];
+
+    startBtn = uibutton(fig,'Text','START','FontSize',18,'FontWeight','bold','BackgroundColor',baseColor, ...
+        'FontColor',[1 1 1],'Position',[220 190 160 55],'ButtonPushedFcn',@(btn,event) startGame(fig));
+
+    quitBtn = uibutton(fig,'Text','QUIT','FontSize',18,'FontWeight','bold','BackgroundColor',baseColor, ...
+        'FontColor',[1 1 1],'Position',[220 110 160 55],'ButtonPushedFcn',@(btn,event) close(fig));
+
+    data.buttons    = [startBtn, quitBtn];
+    data.baseColor  = baseColor;
+    data.hoverColor = hoverColor;
+    fig.UserData    = data;
+
+    for k = 1:2
+        t = timer('ExecutionMode','fixedRate','Period',0.015,'TasksToExecute',12, ...
+            'TimerFcn',@(src,ev) animateButton(src,k,fig));
+        data = fig.UserData;
+        data.timers(k) = t;
+        fig.UserData = data;
+    end
+
+    data = fig.UserData;
+    data.targetColor = [baseColor; baseColor];
+    fig.UserData = data;
+
+    fig.WindowButtonMotionFcn = @onMouseMove;
+end
+
+function startGame(fig)
+    data = fig.UserData;
+    if isfield(data,'timers')
+        for k = 1:numel(data.timers)
+            try
+                stop(data.timers(k));
+                delete(data.timers(k));
+            end
+        end
+    end
+    fig.WindowButtonMotionFcn = [];
+    delete(fig.Children);
+    tank_game_smooth(fig);
+end
+
+function onMouseMove(fig, ~)
+    data = fig.UserData;
+    btns = data.buttons;
+    mousePos = fig.CurrentPoint;
+
+    for k = 1:numel(btns)
+        pos = btns(k).Position;
+
+        inside = mousePos(1) >= pos(1) && mousePos(1) <= pos(1)+pos(3) && ...
+                 mousePos(2) >= pos(2) && mousePos(2) <= pos(2)+pos(4);
+
+        if inside
+            data.targetColor(k,:) = data.hoverColor;
+        else
+            data.targetColor(k,:) = data.baseColor;
+        end
+
+        try
+            stop(data.timers(k));
+            start(data.timers(k));
+        end
+    end
+
+    fig.UserData = data;
+end
+
+function animateButton(~, index, fig)
+    data = fig.UserData;
+    btn = data.buttons(index);
+    current = btn.BackgroundColor;
+    target  = data.targetColor(index,:);
+    newColor = current + 0.20 * (target - current);
+    btn.BackgroundColor = newColor;
+end
+
+function tank_game_smooth(fig)
     gridSize = 20;
-    walls = [];  % Store walls as [x1 y1 x2 y2]
-    
-    % Drawing state
-    isDrawing = false;
-    currentWall = [];
-    tempLine = [];
-    
-    % UI Components
-    ax = uiaxes(fig,'Position',[50 150 600 500]);
+    tankPos = [10 10];
+    tankDir = [1 0];
+    tankVel = [0 0];
+    tankAccel = 0.040;
+    tankMaxSpeed = 1.50;
+    tankFriction = 0.85;
+
+    bulletActive = false;
+    bulletPos = [0 0];
+    bulletDir = [0 0];
+    bulletSpeed = 0.25;
+    bulletBounces = 0;
+    maxBounces = 1;
+
+    targets = [5 5; 15 15; 5 15; 15 5];
+    score = 0;
+
+    keys.up = false;
+    keys.down = false;
+    keys.left = false;
+    keys.right = false;
+    keys.shoot = false;
+
+    ax = uiaxes(fig,'Position',[50 40 500 320]);
     axis(ax,[0.5 gridSize+0.5 0.5 gridSize+0.5]);
     axis(ax,'square');
-    grid(ax,'on');
-    set(ax,'XTick',1:gridSize,'YTick',1:gridSize);
+    set(ax,'XTick',[],'YTick',[]);
     ax.BackgroundColor = [0.1 0.1 0.1];
-    ax.GridColor = [0.3 0.3 0.3];
-    ax.GridAlpha = 0.3;
     hold(ax,'on');
-    title(ax,'Click and drag to draw walls','FontSize',14,'Color',[1 1 1]);
-    
-    % Wall plots storage
-    wallLines = [];
-    
-    % Instructions
-    uilabel(fig,'Text','WALL EDITOR','FontSize',24,'FontWeight','bold', ...
-        'FontColor',[0.95 0.95 0.95],'Position',[670 620 200 40], ...
-        'HorizontalAlignment','center');
-    
-    uilabel(fig,'Text','Instructions:','FontSize',14,'FontWeight','bold', ...
-        'FontColor',[0.8 0.8 0.8],'Position',[670 560 200 30]);
-    
-    instructions = {
-        '1. Click and drag to draw walls'
-        '2. Click "Copy Code" button'
-        '3. Paste into your tank game'
-        ''
-        'Tips:'
-        '• Snap to grid enabled'
-        '• Use Clear All to start over'
-        '• Use Undo to remove last wall'
-    };
-    
-    uilabel(fig,'Text',strjoin(instructions,newline),'FontSize',11, ...
-        'FontColor',[0.7 0.7 0.7],'Position',[670 380 210 180], ...
-        'VerticalAlignment','top');
-    
-    % Buttons
-    copyBtn = uibutton(fig,'Text','Copy Code','FontSize',14,'FontWeight','bold', ...
-        'BackgroundColor',[0.2 0.7 0.3],'FontColor',[1 1 1], ...
-        'Position',[670 320 200 45],'ButtonPushedFcn',@copyCode);
-    
-    clearBtn = uibutton(fig,'Text','Clear All','FontSize',14,'FontWeight','bold', ...
-        'BackgroundColor',[0.8 0.3 0.2],'FontColor',[1 1 1], ...
-        'Position',[670 260 200 45],'ButtonPushedFcn',@clearAll);
-    
-    undoBtn = uibutton(fig,'Text','Undo Last','FontSize',14,'FontWeight','bold', ...
-        'BackgroundColor',[0.5 0.5 0.5],'FontColor',[1 1 1], ...
-        'Position',[670 200 200 45],'ButtonPushedFcn',@undoLast);
-    
-    % Wall count label
-    countLabel = uilabel(fig,'Text','Walls: 0','FontSize',12,'FontWeight','bold', ...
-        'FontColor',[0.9 0.9 0.9],'Position',[670 150 200 30], ...
-        'HorizontalAlignment','center');
-    
-    % Output text area
-    uilabel(fig,'Text','Generated Code:','FontSize',12,'FontWeight','bold', ...
-        'FontColor',[0.8 0.8 0.8],'Position',[50 90 200 30]);
-    
-    outputText = uitextarea(fig,'Position',[50 20 820 65], ...
-        'BackgroundColor',[0.15 0.15 0.15],'FontColor',[0.3 1 0.3], ...
-        'FontName','Courier New','FontSize',10,'Editable','off');
-    
-    % Mouse callbacks
-    ax.ButtonDownFcn = @startDrawing;
-    fig.WindowButtonMotionFcn = @onMouseMove;
-    fig.WindowButtonUpFcn = @stopDrawing;
-    
-    updateOutput();
-    
-    function startDrawing(~, event)
-        if ~strcmp(event.Button, 'normal')
-            return;
-        end
-        
-        pt = event.IntersectionPoint;
-        x = round(pt(1));
-        y = round(pt(2));
-        
-        % Clamp to grid
-        x = max(1, min(gridSize, x));
-        y = max(1, min(gridSize, y));
-        
-        isDrawing = true;
-        currentWall = [x y x y];
-        
-        % Create temporary line
-        tempLine = line(ax,[x x],[y y],'LineWidth',8,'Color',[1 1 0], ...
-            'LineStyle','--');
+
+    if ~isempty(targets)
+        targetsPlot = plot(ax,targets(:,1),targets(:,2),'ks','MarkerFaceColor','k','MarkerSize',14);
+    else
+        targetsPlot = plot(ax,nan,nan,'ks','MarkerFaceColor','k','MarkerSize',14);
     end
-    
-    function onMouseMove(~, ~)
-        if ~isDrawing || isempty(tempLine) || ~isvalid(tempLine)
-            return;
+
+    tankBody = rectangle(ax,'Position',[tankPos(1)-0.4,tankPos(2)-0.4,0.8,0.8], ...
+        'FaceColor','g','EdgeColor','k');
+    tankBarrel = line(ax,[tankPos(1), tankPos(1)+0.7*tankDir(1)], ...
+        [tankPos(2), tankPos(2)+0.7*tankDir(2)],'LineWidth',3,'Color','k');
+    bulletPlot = plot(ax,nan,nan,'ro','MarkerFaceColor','r','MarkerSize',8);
+
+    fig.KeyPressFcn = @onKeyDown;
+    fig.KeyReleaseFcn = @onKeyUp;
+    fig.Name = 'MATLAB Tanks Smooth';
+
+    while isvalid(fig)
+        moveDir = [0 0];
+        if keys.up,    moveDir(2) = moveDir(2) + 1; end
+        if keys.down,  moveDir(2) = moveDir(2) - 1; end
+        if keys.right, moveDir(1) = moveDir(1) + 1; end
+        if keys.left,  moveDir(1) = moveDir(1) - 1; end
+
+        if any(moveDir)
+            n = norm(moveDir);
+            moveDir = moveDir / n;
+            tankVel = tankVel + tankAccel * moveDir;
+            tankDir = moveDir;
         end
-        
-        % Get mouse position relative to axes
-        pt = get(ax, 'CurrentPoint');
-        x = round(pt(1,1));
-        y = round(pt(1,2));
-        
-        % Clamp to grid
-        x = max(1, min(gridSize, x));
-        y = max(1, min(gridSize, y));
-        
-        % Update temporary line
-        currentWall(3:4) = [x y];
-        set(tempLine,'XData',[currentWall(1) currentWall(3)], ...
-            'YData',[currentWall(2) currentWall(4)]);
-    end
-    
-    function stopDrawing(~, ~)
-        if ~isDrawing
-            return;
+
+        tankVel = tankVel * tankFriction;
+
+        speed = norm(tankVel);
+        if speed > tankMaxSpeed
+            tankVel = tankVel * (tankMaxSpeed / speed);
         end
-        
-        isDrawing = false;
-        
-        % Only add wall if it has length
-        if norm(currentWall(1:2) - currentWall(3:4)) > 0.5
-            walls(end+1,:) = currentWall;
-            
-            % Replace temp line with permanent wall
-            if isvalid(tempLine)
-                delete(tempLine);
+
+        tankPos = tankPos + tankVel;
+        tankPos(1) = min(max(tankPos(1),1),gridSize);
+        tankPos(2) = min(max(tankPos(2),1),gridSize);
+
+        if keys.shoot && ~bulletActive
+            bulletActive = true;
+            bulletPos = tankPos;
+            bulletDir = tankDir;
+            bulletBounces = 0;
+        end
+
+        if bulletActive
+            newBulletPos = bulletPos + bulletSpeed * bulletDir;
+            bounced = false;
+
+            if newBulletPos(1) < 0.5 || newBulletPos(1) > gridSize+0.5
+                bulletDir(1) = -bulletDir(1);
+                newBulletPos(1) = max(0.5, min(gridSize+0.5, newBulletPos(1)));
+                bounced = true;
             end
-            
-            wallLines(end+1) = line(ax,[currentWall(1) currentWall(3)], ...
-                [currentWall(2) currentWall(4)],'LineWidth',8,'Color',[0.4 0.4 0.4]);
-            
-            updateOutput();
+
+            if newBulletPos(2) < 0.5 || newBulletPos(2) > gridSize+0.5
+                bulletDir(2) = -bulletDir(2);
+                newBulletPos(2) = max(0.5, min(gridSize+0.5, newBulletPos(2)));
+                bounced = true;
+            end
+
+            if bounced
+                bulletBounces = bulletBounces + 1;
+                if bulletBounces > maxBounces
+                    bulletActive = false;
+                end
+            end
+
+            bulletPos = newBulletPos;
+
+            if ~isempty(targets)
+                hitIndex = 0;
+                for i = 1:size(targets,1)
+                    dist = norm(bulletPos - targets(i,:));
+                    if dist < 0.6
+                        hitIndex = i;
+                        break;
+                    end
+                end
+                if hitIndex > 0
+                    targets(hitIndex,:) = [];
+                    bulletActive = false;
+                    score = score + 1;
+                    if isempty(targets)
+                        set(targetsPlot,'XData',nan,'YData',nan);
+                    else
+                        set(targetsPlot,'XData',targets(:,1),'YData',targets(:,2));
+                    end
+                end
+            end
+        end
+
+        tankBody.Position = [tankPos(1)-0.4,tankPos(2)-0.4,0.8,0.8];
+        tankBarrel.XData = [tankPos(1), tankPos(1)+0.7*tankDir(1)];
+        tankBarrel.YData = [tankPos(2), tankPos(2)+0.7*tankDir(2)];
+
+        if bulletActive
+            set(bulletPlot,'XData',bulletPos(1),'YData',bulletPos(2));
         else
-            % Remove temp line if wall too short
-            if isvalid(tempLine)
-                delete(tempLine);
-            end
+            set(bulletPlot,'XData',nan,'YData',nan);
         end
-        
-        tempLine = [];
-        currentWall = [];
+
+        title(ax,sprintf('Score: %d | Bounces: %d/%d', score, bulletBounces, maxBounces+1));
+        drawnow limitrate
+        pause(0.02);
     end
-    
-    function clearAll(~, ~)
-        walls = [];
-        
-        % Delete all wall lines
-        for i = 1:length(wallLines)
-            if isvalid(wallLines(i))
-                delete(wallLines(i));
-            end
+
+    function onKeyDown(~,event)
+        switch event.Key
+            case 'uparrow'
+                keys.up = true;
+            case 'downarrow'
+                keys.down = false;
+                keys.down = true;
+            case 'leftarrow'
+                keys.left = true;
+            case 'rightarrow'
+                keys.right = true;
+            case 'space'
+                keys.shoot = true;
         end
-        wallLines = [];
-        
-        % Delete temp line if exists
-        if ~isempty(tempLine) && isvalid(tempLine)
-            delete(tempLine);
-        end
-        
-        isDrawing = false;
-        currentWall = [];
-        tempLine = [];
-        
-        updateOutput();
     end
-    
-    function undoLast(~, ~)
-        if isempty(walls)
-            return;
+
+    function onKeyUp(~,event)
+        switch event.Key
+            case 'uparrow'
+                keys.up = false;
+            case 'downarrow'
+                keys.down = false;
+            case 'leftarrow'
+                keys.left = false;
+            case 'rightarrow'
+                keys.right = false;
+            case 'space'
+                keys.shoot = false;
         end
-        
-        % Remove last wall
-        walls(end,:) = [];
-        
-        % Delete last wall line
-        if ~isempty(wallLines) && isvalid(wallLines(end))
-            delete(wallLines(end));
-        end
-        wallLines(end) = [];
-        
-        updateOutput();
-    end
-    
-    function copyCode(~, ~)
-        if isempty(walls)
-            uialert(fig,'No walls to copy! Draw some walls first.','No Walls','Icon','warning');
-            return;
-        end
-        
-        % Copy to clipboard
-        clipboard('copy', outputText.Value);
-        
-        % Visual feedback
-        originalColor = copyBtn.BackgroundColor;
-        copyBtn.Text = 'Copied!';
-        copyBtn.BackgroundColor = [0.1 0.9 0.2];
-        pause(0.5);
-        copyBtn.Text = 'Copy Code';
-        copyBtn.BackgroundColor = originalColor;
-    end
-    
-    function updateOutput()
-        countLabel.Text = sprintf('Walls: %d', size(walls,1));
-        
-        if isempty(walls)
-            outputText.Value = 'walls = [];  % No walls defined yet';
-            return;
-        end
-        
-        % Generate MATLAB code
-        code = 'walls = [';
-        for i = 1:size(walls,1)
-            if i > 1
-                code = [code sprintf('\n    ')];
-            else
-                code = [code newline '    '];
-            end
-            code = [code sprintf('%d %d %d %d;', walls(i,1), walls(i,2), walls(i,3), walls(i,4))];
-        end
-        code = [code newline '];'];
-        
-        outputText.Value = code;
     end
 end
